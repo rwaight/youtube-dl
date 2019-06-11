@@ -47,7 +47,7 @@ from .nbc import NBCSportsVPlayerIE
 from .ooyala import OoyalaIE
 from .rutv import RUTVIE
 from .tvc import TVCIE
-from .sportbox import SportBoxEmbedIE
+from .sportbox import SportBoxIE
 from .smotri import SmotriIE
 from .myvi import MyviIE
 from .condenast import CondeNastIE
@@ -89,7 +89,10 @@ from .piksel import PikselIE
 from .videa import VideaIE
 from .twentymin import TwentyMinutenIE
 from .ustream import UstreamIE
-from .openload import OpenloadIE
+from .openload import (
+    OpenloadIE,
+    VerystreamIE,
+)
 from .videopress import VideoPressIE
 from .rutube import RutubeIE
 from .limelight import LimelightBaseIE
@@ -109,11 +112,13 @@ from .vice import ViceIE
 from .xfileshare import XFileShareIE
 from .cloudflarestream import CloudflareStreamIE
 from .peertube import PeerTubeIE
+from .teachable import TeachableIE
 from .indavideo import IndavideoEmbedIE
 from .apa import APAIE
 from .foxnews import FoxNewsIE
 from .viqeo import ViqeoIE
 from .expressen import ExpressenIE
+from .zype import ZypeIE
 
 
 class GenericIE(InfoExtractor):
@@ -428,7 +433,7 @@ class GenericIE(InfoExtractor):
             },
         },
         {
-            # https://github.com/rg3/youtube-dl/issues/2253
+            # https://github.com/ytdl-org/youtube-dl/issues/2253
             'url': 'http://bcove.me/i6nfkrc3',
             'md5': '0ba9446db037002366bab3b3eb30c88c',
             'info_dict': {
@@ -453,7 +458,7 @@ class GenericIE(InfoExtractor):
             },
         },
         {
-            # https://github.com/rg3/youtube-dl/issues/3541
+            # https://github.com/ytdl-org/youtube-dl/issues/3541
             'add_ie': ['BrightcoveLegacy'],
             'url': 'http://www.kijk.nl/sbs6/leermijvrouwenkennen/videos/jqMiXKAYan2S/aflevering-1',
             'info_dict': {
@@ -917,7 +922,7 @@ class GenericIE(InfoExtractor):
             }
         },
         # Multiple brightcove videos
-        # https://github.com/rg3/youtube-dl/issues/2283
+        # https://github.com/ytdl-org/youtube-dl/issues/2283
         {
             'url': 'http://www.newyorker.com/online/blogs/newsdesk/2014/01/always-never-nuclear-command-and-control.html',
             'info_dict': {
@@ -2071,6 +2076,20 @@ class GenericIE(InfoExtractor):
             'playlist_count': 6,
         },
         {
+            # Zype embed
+            'url': 'https://www.cookscountry.com/episode/554-smoky-barbecue-favorites',
+            'info_dict': {
+                'id': '5b400b834b32992a310622b9',
+                'ext': 'mp4',
+                'title': 'Smoky Barbecue Favorites',
+                'thumbnail': r're:^https?://.*\.jpe?g',
+            },
+            'add_ie': [ZypeIE.ie_key()],
+            'params': {
+                'skip_download': True,
+            },
+        },
+        {
             # videojs embed
             'url': 'https://video.sibnet.ru/shell.php?videoid=3422904',
             'info_dict': {
@@ -2181,10 +2200,7 @@ class GenericIE(InfoExtractor):
 
     def _real_extract(self, url):
         if url.startswith('//'):
-            return {
-                '_type': 'url',
-                'url': self.http_scheme() + url,
-            }
+            return self.url_result(self.http_scheme() + url)
 
         parsed_url = compat_urlparse.urlparse(url)
         if not parsed_url.scheme:
@@ -2358,7 +2374,7 @@ class GenericIE(InfoExtractor):
             return camtasia_res
 
         # Sometimes embedded video player is hidden behind percent encoding
-        # (e.g. https://github.com/rg3/youtube-dl/issues/2448)
+        # (e.g. https://github.com/ytdl-org/youtube-dl/issues/2448)
         # Unescaping the whole page allows to handle those cases in a generic way
         webpage = compat_urllib_parse_unquote(webpage)
 
@@ -2533,11 +2549,11 @@ class GenericIE(InfoExtractor):
             return self.url_result(mobj.group('url'))
 
         # Look for Ooyala videos
-        mobj = (re.search(r'player\.ooyala\.com/[^"?]+[?#][^"]*?(?:embedCode|ec)=(?P<ec>[^"&]+)', webpage) or
-                re.search(r'OO\.Player\.create\([\'"].*?[\'"],\s*[\'"](?P<ec>.{32})[\'"]', webpage) or
-                re.search(r'OO\.Player\.create\.apply\(\s*OO\.Player\s*,\s*op\(\s*\[\s*[\'"][^\'"]*[\'"]\s*,\s*[\'"](?P<ec>.{32})[\'"]', webpage) or
-                re.search(r'SBN\.VideoLinkset\.ooyala\([\'"](?P<ec>.{32})[\'"]\)', webpage) or
-                re.search(r'data-ooyala-video-id\s*=\s*[\'"](?P<ec>.{32})[\'"]', webpage))
+        mobj = (re.search(r'player\.ooyala\.com/[^"?]+[?#][^"]*?(?:embedCode|ec)=(?P<ec>[^"&]+)', webpage)
+                or re.search(r'OO\.Player\.create\([\'"].*?[\'"],\s*[\'"](?P<ec>.{32})[\'"]', webpage)
+                or re.search(r'OO\.Player\.create\.apply\(\s*OO\.Player\s*,\s*op\(\s*\[\s*[\'"][^\'"]*[\'"]\s*,\s*[\'"](?P<ec>.{32})[\'"]', webpage)
+                or re.search(r'SBN\.VideoLinkset\.ooyala\([\'"](?P<ec>.{32})[\'"]\)', webpage)
+                or re.search(r'data-ooyala-video-id\s*=\s*[\'"](?P<ec>.{32})[\'"]', webpage))
         if mobj is not None:
             embed_token = self._search_regex(
                 r'embedToken[\'"]?\s*:\s*[\'"]([^\'"]+)',
@@ -2566,19 +2582,6 @@ class GenericIE(InfoExtractor):
         mobj = re.search(r'<iframe .*?src="(http://mpora\.(?:com|de)/videos/[^"]+)"', webpage)
         if mobj is not None:
             return self.url_result(mobj.group(1), 'Mpora')
-
-        # Look for embedded NovaMov-based player
-        mobj = re.search(
-            r'''(?x)<(?:pagespeed_)?iframe[^>]+?src=(["\'])
-                    (?P<url>http://(?:(?:embed|www)\.)?
-                        (?:novamov\.com|
-                           nowvideo\.(?:ch|sx|eu|at|ag|co)|
-                           videoweed\.(?:es|com)|
-                           movshare\.(?:net|sx|ag)|
-                           divxstage\.(?:eu|net|ch|co|at|ag))
-                        /embed\.php.+?)\1''', webpage)
-        if mobj is not None:
-            return self.url_result(mobj.group('url'))
 
         # Look for embedded Facebook player
         facebook_urls = FacebookIE._extract_urls(webpage)
@@ -2636,9 +2639,9 @@ class GenericIE(InfoExtractor):
             return self.url_result(tvc_url, 'TVC')
 
         # Look for embedded SportBox player
-        sportbox_urls = SportBoxEmbedIE._extract_urls(webpage)
+        sportbox_urls = SportBoxIE._extract_urls(webpage)
         if sportbox_urls:
-            return self.playlist_from_matches(sportbox_urls, video_id, video_title, ie='SportBoxEmbed')
+            return self.playlist_from_matches(sportbox_urls, video_id, video_title, ie=SportBoxIE.ie_key())
 
         # Look for embedded XHamster player
         xhamster_urls = XHamsterEmbedIE._extract_urls(webpage)
@@ -3004,6 +3007,12 @@ class GenericIE(InfoExtractor):
             return self.playlist_from_matches(
                 openload_urls, video_id, video_title, ie=OpenloadIE.ie_key())
 
+        # Look for Verystream embeds
+        verystream_urls = VerystreamIE._extract_urls(webpage)
+        if verystream_urls:
+            return self.playlist_from_matches(
+                verystream_urls, video_id, video_title, ie=VerystreamIE.ie_key())
+
         # Look for VideoPress embeds
         videopress_urls = VideoPressIE._extract_urls(webpage)
         if videopress_urls:
@@ -3023,7 +3032,7 @@ class GenericIE(InfoExtractor):
                 wapo_urls, video_id, video_title, ie=WashingtonPostIE.ie_key())
 
         # Look for Mediaset embeds
-        mediaset_urls = MediasetIE._extract_urls(webpage)
+        mediaset_urls = MediasetIE._extract_urls(self, webpage)
         if mediaset_urls:
             return self.playlist_from_matches(
                 mediaset_urls, video_id, video_title, ie=MediasetIE.ie_key())
@@ -3097,6 +3106,10 @@ class GenericIE(InfoExtractor):
             return self.playlist_from_matches(
                 peertube_urls, video_id, video_title, ie=PeerTubeIE.ie_key())
 
+        teachable_url = TeachableIE._extract_url(webpage, url)
+        if teachable_url:
+            return self.url_result(teachable_url)
+
         indavideo_urls = IndavideoEmbedIE._extract_urls(webpage)
         if indavideo_urls:
             return self.playlist_from_matches(
@@ -3129,6 +3142,11 @@ class GenericIE(InfoExtractor):
             return self.playlist_from_matches(
                 expressen_urls, video_id, video_title, ie=ExpressenIE.ie_key())
 
+        zype_urls = ZypeIE._extract_urls(webpage)
+        if zype_urls:
+            return self.playlist_from_matches(
+                zype_urls, video_id, video_title, ie=ZypeIE.ie_key())
+
         # Look for HTML5 media
         entries = self._parse_html5_media_entries(url, webpage, video_id, m3u8_id='hls')
         if entries:
@@ -3155,7 +3173,7 @@ class GenericIE(InfoExtractor):
                     jwplayer_data, video_id, require_title=False, base_url=url)
                 return merge_dicts(info, info_dict)
             except ExtractorError:
-                # See https://github.com/rg3/youtube-dl/pull/16735
+                # See https://github.com/ytdl-org/youtube-dl/pull/16735
                 pass
 
         # Video.js embed
@@ -3190,8 +3208,8 @@ class GenericIE(InfoExtractor):
                 else:
                     formats.append({
                         'url': src,
-                        'ext': (mimetype2ext(src_type) or
-                                ext if ext in KNOWN_EXTENSIONS else 'mp4'),
+                        'ext': (mimetype2ext(src_type)
+                                or ext if ext in KNOWN_EXTENSIONS else 'mp4'),
                     })
             if formats:
                 self._sort_formats(formats)

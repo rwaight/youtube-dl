@@ -39,6 +39,7 @@ from .compat import (
     compat_HTMLParser,
     compat_basestring,
     compat_chr,
+    compat_cookiejar,
     compat_ctypes_WINFUNCTYPE,
     compat_etree_fromstring,
     compat_expanduser,
@@ -124,8 +125,8 @@ KNOWN_EXTENSIONS = (
 
 # needed for sanitizing filenames in restricted mode
 ACCENT_CHARS = dict(zip('ÂÃÄÀÁÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖŐØŒÙÚÛÜŰÝÞßàáâãäåæçèéêëìíîïðñòóôõöőøœùúûüűýþÿ',
-                        itertools.chain('AAAAAA', ['AE'], 'CEEEEIIIIDNOOOOOOO', ['OE'], 'UUUUUYP', ['ss'],
-                                        'aaaaaa', ['ae'], 'ceeeeiiiionooooooo', ['oe'], 'uuuuuypy')))
+                        itertools.chain('AAAAAA', ['AE'], 'CEEEEIIIIDNOOOOOOO', ['OE'], 'UUUUUY', ['TH', 'ss'],
+                                        'aaaaaa', ['ae'], 'ceeeeiiiionooooooo', ['oe'], 'uuuuuy', ['th'], 'y')))
 
 DATE_FORMATS = (
     '%d %B %Y',
@@ -183,7 +184,7 @@ DATE_FORMATS_MONTH_FIRST.extend([
 ])
 
 PACKED_CODES_RE = r"}\('(.+)',(\d+),(\d+),'([^']+)'\.split\('\|'\)"
-JSON_LD_RE = r'(?is)<script[^>]+type=(["\'])application/ld\+json\1[^>]*>(?P<json_ld>.+?)</script>'
+JSON_LD_RE = r'(?is)<script[^>]+type=(["\']?)application/ld\+json\1[^>]*>(?P<json_ld>.+?)</script>'
 
 
 def preferredencoding():
@@ -545,7 +546,7 @@ def sanitize_url(url):
         return 'http:%s' % url
     # Fix some common typos seen so far
     COMMON_TYPOS = (
-        # https://github.com/rg3/youtube-dl/issues/15649
+        # https://github.com/ytdl-org/youtube-dl/issues/15649
         (r'^httpss://', r'https://'),
         # https://bx1.be/lives/direct-tv/
         (r'^rmtp([es]?)://', r'rtmp\1://'),
@@ -595,7 +596,7 @@ def _htmlentity_transform(entity_with_semicolon):
             numstr = '0%s' % numstr
         else:
             base = 10
-        # See https://github.com/rg3/youtube-dl/issues/7518
+        # See https://github.com/ytdl-org/youtube-dl/issues/7518
         try:
             return compat_chr(int(numstr, base))
         except ValueError:
@@ -860,8 +861,8 @@ class XAttrMetadataError(YoutubeDLError):
         self.msg = msg
 
         # Parsing code and msg
-        if (self.code in (errno.ENOSPC, errno.EDQUOT) or
-                'No space left' in self.msg or 'Disk quota excedded' in self.msg):
+        if (self.code in (errno.ENOSPC, errno.EDQUOT)
+                or 'No space left' in self.msg or 'Disk quota excedded' in self.msg):
             self.reason = 'NO_SPACE'
         elif self.code == errno.E2BIG or 'Argument list too long' in self.msg:
             self.reason = 'VALUE_TOO_LONG'
@@ -876,7 +877,7 @@ class XAttrUnavailableError(YoutubeDLError):
 def _create_http_connection(ydl_handler, http_class, is_https, *args, **kwargs):
     # Working around python 2 bug (see http://bugs.python.org/issue17849) by limiting
     # expected HTTP responses to meet HTTP/1.0 or later (see also
-    # https://github.com/rg3/youtube-dl/issues/6727)
+    # https://github.com/ytdl-org/youtube-dl/issues/6727)
     if sys.version_info < (3, 0):
         kwargs['strict'] = True
     hc = http_class(*args, **compat_kwargs(kwargs))
@@ -1050,7 +1051,7 @@ class YoutubeDLHandler(compat_urllib_request.HTTPHandler):
             resp.msg = old_resp.msg
             del resp.headers['Content-encoding']
         # Percent-encode redirect URL of Location HTTP header to satisfy RFC 3986 (see
-        # https://github.com/rg3/youtube-dl/issues/6457).
+        # https://github.com/ytdl-org/youtube-dl/issues/6457).
         if 300 <= resp.code < 400:
             location = resp.headers.get('Location')
             if location:
@@ -1139,6 +1140,49 @@ class YoutubeDLHTTPSHandler(compat_urllib_request.HTTPSHandler):
             req, **kwargs)
 
 
+class YoutubeDLCookieJar(compat_cookiejar.MozillaCookieJar):
+    _HTTPONLY_PREFIX = '#HttpOnly_'
+
+    def save(self, filename=None, ignore_discard=False, ignore_expires=False):
+        # Store session cookies with `expires` set to 0 instead of an empty
+        # string
+        for cookie in self:
+            if cookie.expires is None:
+                cookie.expires = 0
+        compat_cookiejar.MozillaCookieJar.save(self, filename, ignore_discard, ignore_expires)
+
+    def load(self, filename=None, ignore_discard=False, ignore_expires=False):
+        """Load cookies from a file."""
+        if filename is None:
+            if self.filename is not None:
+                filename = self.filename
+            else:
+                raise ValueError(compat_cookiejar.MISSING_FILENAME_TEXT)
+
+        cf = io.StringIO()
+        with open(filename) as f:
+            for line in f:
+                if line.startswith(self._HTTPONLY_PREFIX):
+                    line = line[len(self._HTTPONLY_PREFIX):]
+                cf.write(compat_str(line))
+        cf.seek(0)
+        self._really_load(cf, filename, ignore_discard, ignore_expires)
+        # Session cookies are denoted by either `expires` field set to
+        # an empty string or 0. MozillaCookieJar only recognizes the former
+        # (see [1]). So we need force the latter to be recognized as session
+        # cookies on our own.
+        # Session cookies may be important for cookies-based authentication,
+        # e.g. usually, when user does not check 'Remember me' check box while
+        # logging in on a site, some important cookies are stored as session
+        # cookies so that not recognizing them will result in failed login.
+        # 1. https://bugs.python.org/issue17164
+        for cookie in self:
+            # Treat `expires=0` cookies as session cookies
+            if cookie.expires == 0:
+                cookie.expires = None
+                cookie.discard = True
+
+
 class YoutubeDLCookieProcessor(compat_urllib_request.HTTPCookieProcessor):
     def __init__(self, cookiejar=None):
         compat_urllib_request.HTTPCookieProcessor.__init__(self, cookiejar)
@@ -1146,7 +1190,7 @@ class YoutubeDLCookieProcessor(compat_urllib_request.HTTPCookieProcessor):
     def http_response(self, request, response):
         # Python 2 will choke on next HTTP request in row if there are non-ASCII
         # characters in Set-Cookie HTTP header of last response (see
-        # https://github.com/rg3/youtube-dl/issues/6769).
+        # https://github.com/ytdl-org/youtube-dl/issues/6769).
         # In order to at least prevent crashing we will percent encode Set-Cookie
         # header before HTTPCookieProcessor starts processing it.
         # if sys.version_info < (3, 0) and response.headers:
@@ -1409,8 +1453,8 @@ def _windows_write_string(s, out):
     def not_a_console(handle):
         if handle == INVALID_HANDLE_VALUE or handle is None:
             return True
-        return ((GetFileType(handle) & ~FILE_TYPE_REMOTE) != FILE_TYPE_CHAR or
-                GetConsoleMode(handle, ctypes.byref(ctypes.wintypes.DWORD())) == 0)
+        return ((GetFileType(handle) & ~FILE_TYPE_REMOTE) != FILE_TYPE_CHAR
+                or GetConsoleMode(handle, ctypes.byref(ctypes.wintypes.DWORD())) == 0)
 
     if not_a_console(h):
         return False
@@ -1446,8 +1490,8 @@ def write_string(s, out=None, encoding=None):
         if _windows_write_string(s, out):
             return
 
-    if ('b' in getattr(out, 'mode', '') or
-            sys.version_info[0] < 3):  # Python 2 lies about mode of sys.stderr
+    if ('b' in getattr(out, 'mode', '')
+            or sys.version_info[0] < 3):  # Python 2 lies about mode of sys.stderr
         byt = s.encode(encoding or preferredencoding(), 'ignore')
         out.write(byt)
     elif hasattr(out, 'buffer'):
@@ -1754,6 +1798,14 @@ def parse_resolution(s):
     return {}
 
 
+def parse_bitrate(s):
+    if not isinstance(s, compat_str):
+        return
+    mobj = re.search(r'\b(\d+)\s*kbps', s)
+    if mobj:
+        return int(mobj.group(1))
+
+
 def month_by_name(name, lang='en'):
     """ Return the number of a month by (locale-independently) English name """
 
@@ -1840,7 +1892,7 @@ def urljoin(base, path):
         path = path.decode('utf-8')
     if not isinstance(path, compat_str) or not path:
         return None
-    if re.match(r'^(?:https?:)?//', path):
+    if re.match(r'^(?:[a-zA-Z][a-zA-Z0-9+-.]*:)?//', path):
         return path
     if isinstance(base, bytes):
         base = base.decode('utf-8')
@@ -1870,7 +1922,7 @@ def int_or_none(v, scale=1, default=None, get_attr=None, invscale=1):
         return default
     try:
         return int(v) * invscale // scale
-    except ValueError:
+    except (ValueError, TypeError):
         return default
 
 
@@ -1891,7 +1943,7 @@ def float_or_none(v, scale=1, invscale=1, default=None):
         return default
     try:
         return float(v) * invscale / scale
-    except ValueError:
+    except (ValueError, TypeError):
         return default
 
 
@@ -1899,8 +1951,8 @@ def bool_or_none(v, default=None):
     return v if isinstance(v, bool) else default
 
 
-def strip_or_none(v):
-    return None if v is None else v.strip()
+def strip_or_none(v, default=None):
+    return v.strip() if isinstance(v, compat_str) else default
 
 
 def url_or_none(url):
@@ -2000,7 +2052,7 @@ def get_exe_version(exe, args=['--version'],
     try:
         # STDIN should be redirected too. On UNIX-like systems, ffmpeg triggers
         # SIGTTOU if youtube-dl is run in the background.
-        # See https://github.com/rg3/youtube-dl/issues/955#issuecomment-209789656
+        # See https://github.com/ytdl-org/youtube-dl/issues/955#issuecomment-209789656
         out, _ = subprocess.Popen(
             [encodeArgument(exe)] + args,
             stdin=subprocess.PIPE,
@@ -2276,10 +2328,10 @@ def merge_dicts(*dicts):
         for k, v in a_dict.items():
             if v is None:
                 continue
-            if (k not in merged or
-                    (isinstance(v, compat_str) and v and
-                        isinstance(merged[k], compat_str) and
-                        not merged[k])):
+            if (k not in merged
+                    or (isinstance(v, compat_str) and v
+                        and isinstance(merged[k], compat_str)
+                        and not merged[k])):
                 merged[k] = v
     return merged
 
@@ -2605,14 +2657,14 @@ def _match_one(filter_part, dct):
     if m:
         op = COMPARISON_OPERATORS[m.group('op')]
         actual_value = dct.get(m.group('key'))
-        if (m.group('quotedstrval') is not None or
-            m.group('strval') is not None or
+        if (m.group('quotedstrval') is not None
+            or m.group('strval') is not None
             # If the original field is a string and matching comparisonvalue is
             # a number we should respect the origin of the original field
             # and process comparison value as a string (see
-            # https://github.com/rg3/youtube-dl/issues/11082).
-            actual_value is not None and m.group('intval') is not None and
-                isinstance(actual_value, compat_str)):
+            # https://github.com/ytdl-org/youtube-dl/issues/11082).
+            or actual_value is not None and m.group('intval') is not None
+                and isinstance(actual_value, compat_str)):
             if m.group('op') not in ('=', '!='):
                 raise ValueError(
                     'Operator %s does not support string values!' % m.group('op'))
@@ -2940,6 +2992,7 @@ class ISO639Utils(object):
         'gv': 'glv',
         'ha': 'hau',
         'he': 'heb',
+        'iw': 'heb',  # Replaced by he in 1989 revision
         'hi': 'hin',
         'ho': 'hmo',
         'hr': 'hrv',
@@ -2949,6 +3002,7 @@ class ISO639Utils(object):
         'hz': 'her',
         'ia': 'ina',
         'id': 'ind',
+        'in': 'ind',  # Replaced by id in 1989 revision
         'ie': 'ile',
         'ig': 'ibo',
         'ii': 'iii',
@@ -3063,6 +3117,7 @@ class ISO639Utils(object):
         'wo': 'wol',
         'xh': 'xho',
         'yi': 'yid',
+        'ji': 'yid',  # Replaced by yi in 1989 revision
         'yo': 'yor',
         'za': 'zha',
         'zh': 'zho',
@@ -3757,7 +3812,7 @@ def urshift(val, n):
 
 
 # Based on png2str() written by @gdkchan and improved by @yokrysty
-# Originally posted at https://github.com/rg3/youtube-dl/issues/9706
+# Originally posted at https://github.com/ytdl-org/youtube-dl/issues/9706
 def decode_png(png_data):
     # Reference: https://www.w3.org/TR/PNG/
     header = png_data[8:]
@@ -3872,7 +3927,7 @@ def write_xattr(path, key, value):
         if hasattr(xattr, 'set'):  # pyxattr
             # Unicode arguments are not supported in python-pyxattr until
             # version 0.5.0
-            # See https://github.com/rg3/youtube-dl/issues/5498
+            # See https://github.com/ytdl-org/youtube-dl/issues/5498
             pyxattr_required_version = '0.5.0'
             if version_tuple(xattr.__version__) < version_tuple(pyxattr_required_version):
                 # TODO: fallback to CLI tools
@@ -3918,9 +3973,9 @@ def write_xattr(path, key, value):
                     executable = 'xattr'
                     opts = ['-w', key, value]
 
-                cmd = ([encodeFilename(executable, True)] +
-                       [encodeArgument(o) for o in opts] +
-                       [encodeFilename(path, True)])
+                cmd = ([encodeFilename(executable, True)]
+                       + [encodeArgument(o) for o in opts]
+                       + [encodeFilename(path, True)])
 
                 try:
                     p = subprocess.Popen(
@@ -3948,8 +4003,12 @@ def write_xattr(path, key, value):
 
 
 def random_birthday(year_field, month_field, day_field):
+    start_date = datetime.date(1950, 1, 1)
+    end_date = datetime.date(1995, 12, 31)
+    offset = random.randint(0, (end_date - start_date).days)
+    random_date = start_date + datetime.timedelta(offset)
     return {
-        year_field: str(random.randint(1950, 1995)),
-        month_field: str(random.randint(1, 12)),
-        day_field: str(random.randint(1, 31)),
+        year_field: str(random_date.year),
+        month_field: str(random_date.month),
+        day_field: str(random_date.day),
     }
